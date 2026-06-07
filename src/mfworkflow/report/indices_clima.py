@@ -141,6 +141,23 @@ def calcular_indices(cfg, figuras_dir: Path | None = None) -> dict | None:
             fig.savefig(p, dpi=150, bbox_inches="tight"); plt.close(fig); figuras["flujo_base"] = p
             resumen.append({"indice": "Índice de flujo base (BFI)", "valor": round(bfi, 2),
                             "interpretacion": "fracción del río sostenida por el acuífero"})
+            # Validación: flujo base OBSERVADO vs caudal base SIMULADO (RIV acuífero->río)
+            try:
+                from mfworkflow.report.resultados import leer_balance
+                bal = leer_balance(cfg.resultados_dir / f"{cfg.model_name}.lst")
+                if bal is not None:
+                    riv = bal["df"][bal["df"]["componente"] == "RIV"]
+                    if not riv.empty:
+                        sim_base = float(riv["salida_m3d"].iloc[0])     # acuífero -> río
+                        obs_base = float(np.nanmean(base))              # flujo base medio observado
+                        if obs_base > 0 and sim_base > 0:
+                            err = 100.0 * (sim_base - obs_base) / obs_base
+                            resumen.append({
+                                "indice": "Flujo base obs vs sim (validación)",
+                                "valor": f"obs {obs_base:.0f} / sim {sim_base:.0f} m³/d",
+                                "interpretacion": f"diferencia {err:+.0f}% (ideal: < ±20%)"})
+            except Exception:  # noqa: BLE001
+                pass
 
     # --- Respuesta napa–clima (memoria del acuífero) ---
     napa = _serie_napa(cfg.resultados_dir, cfg.model_name)

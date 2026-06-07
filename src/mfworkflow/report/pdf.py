@@ -418,6 +418,29 @@ def _bloques_seccion(titulo_sec: str, res, styles, guia: str, textos: dict | Non
                 out.append(Spacer(1, 0.08 * inch))
                 out.append(Paragraph("Balance por capa / sector (m³/día)", styles["Heading4"]))
                 out.append(_df_tabla(res.balance_por_capa, max_rows=30))
+            ic = res.indices_clima
+            if ic and ic.get("tabla") is not None and not ic["tabla"].empty:
+                out.append(Spacer(1, 0.12 * inch))
+                out.append(Paragraph("Índices clima–hidrogeología", styles["Heading4"]))
+                out.append(Paragraph(
+                    "Indicadores que correlacionan el clima con la respuesta del acuífero: sequía "
+                    "(SPI/SPEI), aridez, fracción de la lluvia que recarga, flujo base del río "
+                    "sostenido por el acuífero (BFI) y la memoria del acuífero (desfase napa–clima).",
+                    styles["BodyText"]))
+                out.append(_df_tabla(ic["tabla"], max_rows=12))
+                figs = ic.get("figuras") or {}
+                if figs.get("respuesta"):
+                    out.append(Spacer(1, 0.08 * inch))
+                    out.extend(_imagen(figs["respuesta"], styles,
+                                       titulo="Respuesta napa–clima: la recarga (barras) y el nivel "
+                                              "medio (línea); la napa cae en los años secos y se recupera"))
+                if figs.get("flujo_base"):
+                    out.append(Spacer(1, 0.08 * inch))
+                    out.extend(_imagen(figs["flujo_base"], styles,
+                                       titulo="Separación de flujo base del caudal medido (valida la recarga)"))
+                if figs.get("spi"):
+                    out.append(Spacer(1, 0.08 * inch))
+                    out.extend(_imagen(figs["spi"], styles, titulo="Índice de sequía meteorológica (SPI)"))
         else:
             aviso("Sin balance disponible (requiere el .lst de una corrida).")
 
@@ -461,6 +484,11 @@ def _bloques_seccion(titulo_sec: str, res, styles, guia: str, textos: dict | Non
                 f"(≤ {s['umbral_m']:.1f} m), potencial presencia de ecosistemas dependientes (GDE).",
                 styles["BodyText"]))
             out.extend(_imagen(res.napa["png"], styles))
+        if res.napa_animacion:
+            out.append(Paragraph(
+                "Se incluye además una animación de la evolución temporal del nivel freático "
+                f"(régimen transiente) en los entregables: <i>{res.napa_animacion.name}</i>.",
+                styles["BodyText"]))
         if res.seccion_vertical:
             out.append(Spacer(1, 0.1 * inch))
             out.extend(_imagen(res.seccion_vertical, styles, titulo="Sección vertical (estratos y carga)"))

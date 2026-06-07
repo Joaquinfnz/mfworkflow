@@ -57,6 +57,8 @@ class Resultados:
     recarga: dict | None = None          # {tabla, total_mm, metodo} de la recarga aplicada
     recarga_mapa: Path | None = None     # mapa de recarga distribuida por celda (mm/ano)
     qa: "pd.DataFrame | None" = None      # chequeos automaticos de calidad del modelo (verificacion)
+    indices_clima: dict | None = None     # indices clima-hidrogeologia (SPI/SPEI, flujo base, memoria)
+    napa_animacion: Path | None = None    # GIF de la evolucion temporal de la napa (transiente)
 
 
 def _capas(head: np.ndarray) -> list[np.ndarray]:
@@ -427,6 +429,57 @@ def corte_vertical(resultados_dir: Path, model_name: str, out_dir: Path) -> Path
         return png
     except Exception as exc:  # noqa: BLE001
         logger.warning("Falló el dibujo de la sección vertical: %s", exc)
+        plt.close("all")
+        return None
+
+
+def animacion_napa(resultados_dir: Path, model_name: str, grid, out_dir: Path) -> Path | None:
+    """GIF de la evolución temporal del nivel freático (solo régimen transiente).
+
+    Muestra cómo la napa sube con las lluvias y baja en las sequías a lo largo de la serie.
+    Devuelve el .gif o None si el modelo no es transiente / no hay grilla estructurada.
+    """
+    if grid is None or getattr(grid, "grid_type", "") != "structured":
+        return None
+    hds = Path(resultados_dir) / f"{model_name}.hds"
+    if not hds.exists():
+        return None
+    gif = Path(out_dir) / f"{model_name}_napa_animacion.gif"
+    if gif.exists() and gif.stat().st_mtime >= hds.stat().st_mtime:
+        return gif                                # cache: no regenerar si ya esta al dia
+    try:
+        from matplotlib.animation import FuncAnimation, PillowWriter
+        hf = flopy.utils.HeadFile(str(hds), precision="double")
+        tiempos = hf.get_times()
+        if len(tiempos) < 3:                      # solo tiene sentido en transiente
+            return None
+        capas = [np.asarray(hf.get_data(totim=t))[0] for t in tiempos]
+        masked = [np.ma.masked_where(~np.isfinite(c) | (np.abs(c) >= _INACTIVO), c) for c in capas]
+        finitos = np.concatenate([c.compressed() for c in masked if c.count()])
+        if finitos.size == 0:
+            return None
+        vmin, vmax = np.percentile(finitos, [2, 98])
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fig, ax = plt.subplots(figsize=(6.5, 5.0))
+        quad0 = flopy.plot.PlotMapView(modelgrid=grid, ax=ax).plot_array(
+            masked[0], cmap="viridis", vmin=vmin, vmax=vmax)
+        fig.colorbar(quad0, ax=ax, label="carga (m)", shrink=0.85)
+
+        def _frame(i):
+            ax.clear()
+            pmv = flopy.plot.PlotMapView(modelgrid=grid, ax=ax)
+            pmv.plot_array(masked[i], cmap="viridis", vmin=vmin, vmax=vmax)
+            ax.set_xlabel("Este (m)"); ax.set_ylabel("Norte (m)"); ax.set_aspect("equal")
+            ax.set_title(f"Nivel freático — periodo {i + 1}/{len(masked)}")
+
+        anim = FuncAnimation(fig, _frame, frames=len(masked), blit=False)
+        gif = out_dir / f"{model_name}_napa_animacion.gif"
+        anim.save(str(gif), writer=PillowWriter(fps=4))
+        plt.close(fig)
+        return gif if gif.exists() else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo generar la animacion de la napa: %s", exc)
         plt.close("all")
         return None
 
@@ -908,6 +961,7 @@ def recolectar_resultados(cfg, figuras_dir: Path | None = None) -> Resultados:
     if hds.exists():
         r.mapa_conceptual = mapa_conceptual(cfg, res_dir, model, figuras_dir)
         r.recarga_mapa = mapa_recarga(cfg, grid, figuras_dir, model)
+        r.napa_animacion = animacion_napa(res_dir, model, grid, figuras_dir)
 
     # --- Malla Voronoi no estructurada (DISV), si se corrió 'mfw mesh --run' ---
     malla = res_dir / "malla"
@@ -973,5 +1027,12 @@ def recolectar_resultados(cfg, figuras_dir: Path | None = None) -> Resultados:
 
     # --- Chequeos de calidad (verificacion del modelo) ---
     r.qa = chequeos_qa(cfg, r)
+
+    # --- Índices clima-hidrogeología (si hay clima.csv) ---
+    try:
+        from mfworkflow.report.indices_clima import calcular_indices
+        r.indices_clima = calcular_indices(cfg)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudieron calcular los indices clima-hidrogeologia: %s", exc)
 
     return r

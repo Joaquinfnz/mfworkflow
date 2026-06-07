@@ -107,6 +107,11 @@ def armar_entregables(cfg, perfil: str = "sea") -> Path:
     if res.prediccion:
         figs.append(_copiar(res.prediccion.get("descenso_png"), figuras))
         figs.append(_copiar(res.prediccion.get("incert_png"), figuras))
+    for extra in (res.mapa_conceptual, res.recarga_mapa, res.napa_animacion):
+        figs.append(_copiar(extra, figuras))
+    if res.indices_clima:                              # figuras de indices clima-hidrogeologia
+        for f in (res.indices_clima.get("figuras") or {}).values():
+            figs.append(_copiar(f, figuras))
     figs = [f for f in figs if f]
 
     # 3) Tablas
@@ -123,6 +128,8 @@ def armar_entregables(cfg, perfil: str = "sea") -> Path:
         qa_csv = tablas / "verificacion_qa.csv"
         res.qa.to_csv(qa_csv, index=False)
         tbs.append(qa_csv)
+    if res.indices_clima and res.indices_clima.get("csv"):   # indices clima-hidrogeologia
+        tbs.append(_copiar(res.indices_clima["csv"], tablas))
     tbs = [t for t in tbs if t]
 
     # 4) Modelo (inputs de texto + trazabilidad)
