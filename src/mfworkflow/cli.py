@@ -629,8 +629,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             if mod in ("flopy",):
                 ok = False
 
-    if not shutil.which("mp7") or not shutil.which("triangle"):
-        print("\nSugerencia: instala binarios MODFLOW/MODPATH/Triangle con:")
+    missing_binaries = []
+    for binary in ("mp7", "triangle"):
+        if not shutil.which(binary):
+            missing_binaries.append(binary)
+    if missing_binaries:
+        print(f"\nBinarios faltantes: {', '.join(missing_binaries)}")
+        print("Sugerencia: instala binarios MODFLOW/MODPATH/Triangle con:")
         print("  get-modflow :flopy")
     print("\nEstado:", "todo OK" if ok else "faltan componentes (ver arriba)")
     return 0 if ok else 1

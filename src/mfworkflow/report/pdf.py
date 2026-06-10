@@ -35,6 +35,7 @@ try:
     HAS_REPORTLAB = True
 except Exception:  # pragma: no cover - depende del entorno
     HAS_REPORTLAB = False
+    inch = 72  # 1 pulgada = 72 pt (fallback para defaults de funcion)
 
 
 logger = logging.getLogger("mfworkflow")

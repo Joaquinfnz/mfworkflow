@@ -145,7 +145,8 @@ def monte_carlo(data_dir: Path, calib_params: Path, output_dir: Path, *, n: int 
                 heads.append(_final_head(ws, model_name)[0])
             except SystemExit:
                 continue  # no convergio: esperable en algunas realizaciones
-            except Exception as exc:  # noqa: BLE001 - bug real (datos/import): que se vea
+            except (RuntimeError, ValueError, TypeError, KeyError, FileNotFoundError,
+                    OSError, IndexError, ArithmeticError) as exc:
                 logger.warning("Realizacion %d fallo (no por convergencia): %s", i, exc)
                 continue
 
@@ -155,24 +156,44 @@ def monte_carlo(data_dir: Path, calib_params: Path, output_dir: Path, *, n: int 
     stack = np.array(heads)
     mean_h = stack.mean(axis=0)
     std_h = stack.std(axis=0)
+    p5 = np.percentile(stack, 5, axis=0)
+    p50 = np.percentile(stack, 50, axis=0)
+    p95 = np.percentile(stack, 95, axis=0)
 
     out: dict[str, Path] = {}
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    im0 = axes[0].imshow(mean_h, origin="lower", cmap="viridis")
-    axes[0].set_title("Carga media (n=%d)" % len(heads))
-    fig.colorbar(im0, ax=axes[0], label="m")
-    im1 = axes[1].imshow(std_h, origin="lower", cmap="magma")
-    axes[1].set_title("Incertidumbre (desv. estandar)")
-    fig.colorbar(im1, ax=axes[1], label="m")
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+    im0 = axes[0, 0].imshow(mean_h, origin="lower", cmap="viridis")
+    axes[0, 0].set_title("Carga media (n=%d)" % len(heads))
+    fig.colorbar(im0, ax=axes[0, 0], label="m")
+    im1 = axes[0, 1].imshow(std_h, origin="lower", cmap="magma")
+    axes[0, 1].set_title("Incertidumbre (desv. estandar)")
+    fig.colorbar(im1, ax=axes[0, 1], label="m")
+    im2 = axes[1, 0].imshow(p5, origin="lower", cmap="Blues_r")
+    axes[1, 0].set_title("Percentil 5 (carga baja)")
+    fig.colorbar(im2, ax=axes[1, 0], label="m")
+    im3 = axes[1, 1].imshow(p95, origin="lower", cmap="Reds")
+    axes[1, 1].set_title("Percentil 95 (carga alta)")
+    fig.colorbar(im3, ax=axes[1, 1], label="m")
     fig.tight_layout()
     out["mapa"] = output_dir / "incertidumbre_montecarlo.png"
     fig.savefig(out["mapa"], dpi=200, bbox_inches="tight")
     plt.close(fig)
+
+    out["mapa_p5"] = output_dir / "carga_percentil_5.png"
+    _dibujar_mapa(np.ma.masked_where(np.abs(p5) >= 1e29, p5), None, out["mapa_p5"],
+                  titulo="Carga - Percentil 5 (n=%d)" % len(heads), cbar_label="m")
+
+    out["mapa_p95"] = output_dir / "carga_percentil_95.png"
+    _dibujar_mapa(np.ma.masked_where(np.abs(p95) >= 1e29, p95), None, out["mapa_p95"],
+                  titulo="Carga - Percentil 95 (n=%d)" % len(heads), cbar_label="m")
 
     out["resumen"] = output_dir / "incertidumbre_resumen.csv"
     pd.DataFrame([{
         "realizaciones": len(heads),
         "incertidumbre_media_m": float(std_h.mean()),
         "incertidumbre_max_m": float(std_h.max()),
+        "carga_p5_media_m": float(np.nanmean(p5)),
+        "carga_p50_media_m": float(np.nanmean(p50)),
+        "carga_p95_media_m": float(np.nanmean(p95)),
     }]).to_csv(out["resumen"], index=False)
     return out

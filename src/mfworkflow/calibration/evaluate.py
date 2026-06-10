@@ -24,21 +24,41 @@ logger = logging.getLogger("mfworkflow")
 
 
 def load_simulated_heads(hds_path: Path, observations: pd.DataFrame) -> pd.DataFrame:
-    """Extrae cargas simuladas (ultimo tiempo) para cada observacion y residuales."""
+    """Extrae cargas simuladas para cada observacion, matching por stress_period si existe.
+
+    Si la columna 'stress_period' esta presente y tiene valores >= 0, extrae la carga
+    al tiempo correspondiente. Si no, usa el ultimo tiempo (comportamiento anterior).
+    """
     hds = flopy.utils.HeadFile(str(hds_path), precision="double")
     times = hds.get_times()
     if not times:
         raise ValueError("El archivo HDS no contiene tiempos simulados.")
-    final_head = hds.get_data(totim=times[-1])
+
+    has_sp = "stress_period" in observations.columns
+    use_final = not has_sp
+
+    if has_sp:
+        sp_time_map = {i: t for i, t in enumerate(hds.get_times())}
+        default_time = times[-1]
 
     rows = []
     omitidas = 0
     for _, obs in observations.iterrows():
         layer = int(obs["layer"]) - 1
-        row = int(obs["row"])
-        col = int(obs["col"])
-        simulated = float(final_head[layer, row, col])
-        # Celda seca/inactiva (MODFLOW marca |h| ~ 1e30): no contamina el ajuste.
+        row = int(obs["row"]) - 1
+        col = int(obs["col"]) - 1
+
+        if use_final:
+            head_arr = hds.get_data(totim=times[-1])
+            simulated = float(head_arr[layer, row, col])
+        else:
+            sp = int(obs.get("stress_period", -1))
+            if sp < 0 or sp >= len(sp_time_map):
+                head_arr = hds.get_data(totim=times[-1])
+            else:
+                head_arr = hds.get_data(totim=sp_time_map[sp])
+            simulated = float(head_arr[layer, row, col])
+
         if not np.isfinite(simulated) or abs(simulated) >= 1e29:
             omitidas += 1
             continue
@@ -66,9 +86,16 @@ def load_simulated_heads(hds_path: Path, observations: pd.DataFrame) -> pd.DataF
 
 
 def calculate_metrics(residuals: pd.DataFrame) -> pd.DataFrame:
-    """Calcula metricas de ajuste (RMSE, MAE, sesgo, RMSE ponderado)."""
+    """Calcula metricas de ajuste (RMSE, MAE, sesgo, RMSE ponderado, NSE, R2, PBIAS)."""
     residual = residuals["residual_m"].to_numpy(dtype=float)
     weighted = residuals["residual_ponderado_m"].to_numpy(dtype=float)
+    obs = residuals["observado_m"].to_numpy(dtype=float)
+    sim = residuals["simulado_m"].to_numpy(dtype=float)
+    obs_mean = float(np.mean(obs))
+    ss_tot = float(np.sum((obs - obs_mean) ** 2))
+    nse = float(1.0 - np.sum(residual**2) / ss_tot) if ss_tot > 0 else float("nan")
+    r2 = float(np.corrcoef(obs, sim)[0, 1] ** 2) if len(obs) > 1 else float("nan")
+    pbias = float(100.0 * np.sum(residual) / np.sum(obs)) if np.sum(obs) != 0 else float("nan")
     return pd.DataFrame(
         [
             {"metrica": "n_observaciones", "valor": float(len(residuals))},
@@ -76,6 +103,9 @@ def calculate_metrics(residuals: pd.DataFrame) -> pd.DataFrame:
             {"metrica": "mae_m", "valor": float(np.mean(np.abs(residual)))},
             {"metrica": "sesgo_m", "valor": float(np.mean(residual))},
             {"metrica": "rmse_ponderado_m", "valor": float(np.sqrt(np.mean(weighted**2)))},
+            {"metrica": "nse", "valor": nse, "interpretacion": ">0.5 bueno, >0.7 muy bueno (SEIA)"},
+            {"metrica": "r2", "valor": r2, "interpretacion": "correlacion al cuadrado"},
+            {"metrica": "pbias_pct", "valor": pbias, "interpretacion": "sesgo porcentual, ideal < |10|%"},
         ]
     )
 

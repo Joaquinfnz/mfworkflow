@@ -22,17 +22,21 @@ logger = logging.getLogger("mfworkflow")
 
 
 def balance_suelo(precip_mm, pet_mm, *, cc_mm: float = 100.0,
-                  coef_escorrentia: float = 0.0, soil_inicial: float | None = None) -> list[float]:
+                  wp_mm: float = 50.0, coef_escorrentia: float = 0.0,
+                  soil_inicial: float | None = None) -> list[float]:
     """Recarga (mm) por periodo con un balance de suelo (Thornthwaite-Mather simplificado).
 
-    Para cada periodo: la lluvia que no escurre (P*(1-esc)) menos la ET potencial llena
-    primero el almacenamiento del suelo (hasta `cc_mm`); el excedente es recarga. Si el
-    balance es negativo, el suelo se seca y no hay recarga.
+    La ET real se reduce cuando el suelo esta por debajo de capacidad de campo:
+    AET = PET * min(1, soil / cc_mm). Si el suelo baja del punto de marchitez (wp_mm),
+    AET = 0. Esto evita sobre-estimar la ET en climas aridos.
     """
     soil = float(cc_mm if soil_inicial is None else soil_inicial)
     recargas: list[float] = []
     for P, PET in zip(precip_mm, pet_mm):
-        balance = float(P) * (1.0 - coef_escorrentia) - float(PET)
+        pct = float(P) * (1.0 - coef_escorrentia)
+        aet = float(PET) * min(1.0, soil / cc_mm) if cc_mm > 0 else float(PET)
+        aet = min(aet, max(0.0, soil - wp_mm) + pct)
+        balance = pct - aet
         if balance >= 0:
             espacio = cc_mm - soil
             if balance <= espacio:
@@ -42,16 +46,16 @@ def balance_suelo(precip_mm, pet_mm, *, cc_mm: float = 100.0,
                 soil = cc_mm
                 rec = balance - espacio
         else:
-            soil = max(0.0, soil + balance)
+            soil = max(wp_mm, soil + balance)
             rec = 0.0
         recargas.append(max(0.0, rec))
     return recargas
 
 
-def _pet_desde_temp(temp_c: np.ndarray) -> np.ndarray:
-    """ET potencial aproximada cuando no hay et0 (estimacion gruesa por temperatura)."""
-    # Aproximacion simple y conservadora: ~5 mm por grado positivo y periodo.
-    return np.clip(temp_c, 0, None) * 5.0
+def _pet_desde_temp(temp_c: np.ndarray, *, lat: float = -33.0) -> np.ndarray:
+    """ET potencial via Hargreaves cuando no hay et0 (delegado a hidrologia)."""
+    from mfworkflow.hidrologia import pet_hargreaves
+    return pet_hargreaves(temp_c, lat=lat)
 
 
 def _dias_por_periodo(df: pd.DataFrame, n: int) -> np.ndarray:
@@ -82,7 +86,7 @@ def _es_diario(df: pd.DataFrame) -> bool:
 def calcular_recarga(clima_path: Path, tablas_dir: Path, *, metodo: str = "balance",
                      cc_mm: float = 100.0, coef_infiltracion: float = 0.15,
                      coef_escorrentia: float = 0.1, k_percolacion: float = 1.0,
-                     transiente: bool = False, freq: str = "MS") -> dict:
+                     transiente: bool = False, freq: str = "MS", lat: float = -33.0) -> dict:
     """Lee clima.csv y escribe recarga_periodos.csv (recarga por periodo de stress).
 
     metodo: 'balance' (suelo, usa precip+ET) o 'coeficiente' (recarga = coef*precip).
@@ -102,8 +106,9 @@ def calcular_recarga(clima_path: Path, tablas_dir: Path, *, metodo: str = "balan
     if "et0_mm" in df.columns:
         pet = df["et0_mm"].astype(float).to_numpy()
     elif "temp_c" in df.columns:
-        pet = _pet_desde_temp(df["temp_c"].astype(float).to_numpy())
-        logger.warning("clima.csv sin 'et0_mm'; ET estimada desde 'temp_c' (aproximada).")
+        lat = float(df["lat"].iloc[0]) if "lat" in df.columns else -33.0
+        pet = _pet_desde_temp(df["temp_c"].astype(float).to_numpy(), lat=lat)
+        logger.warning("clima.csv sin 'et0_mm'; ET estimada via Hargreaves desde 'temp_c' (aproximada, lat=%.1f).", lat)
     else:
         pet = np.zeros(len(precip))
 

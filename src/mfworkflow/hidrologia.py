@@ -17,19 +17,62 @@ import pandas as pd
 logger = logging.getLogger("mfworkflow")
 
 
+def pet_hargreaves(temp_c, *, lat: float = -33.0, td: float = 12.0) -> np.ndarray:
+    """ET potencial diaria (mm/dia) via Hargreaves-Samani (1985).
+
+    PET = 0.0023 * RA * (T + 17.8) * sqrt(TD)
+
+    donde RA = radiacion extraterrestre (MJ/m2/dia) calculada desde la latitud,
+    T = temperatura media (C), TD = rango diurno de temperatura (C).
+    Si TD no esta disponible, se usa un valor tipico de 12 C.
+
+    Parametros:
+        temp_c: temperatura media (C), puede ser array.
+        lat: latitud en grados (negativo hemisferio sur). Default -33 (Santiago).
+        td: rango diurno de temperatura (C). Default 12.
+
+    Retorna:
+        PET en mm/dia (array numpy, mismo largo que temp_c).
+    """
+    T = np.clip(np.asarray(temp_c, dtype=float), -20, None)
+    n = len(T)
+    doy = np.arange(1, n + 1)
+    lat_rad = np.radians(lat)
+    decl = 0.409 * np.sin(2.0 * np.pi * doy / 365.0 - 1.39)
+    ws = np.arccos(np.clip(-np.tan(lat_rad) * np.tan(decl), -1, 1))
+    ra = (24.0 * 60.0 / np.pi) * 0.0820 * (
+        ws * np.sin(lat_rad) * np.sin(decl)
+        + np.cos(lat_rad) * np.cos(decl) * np.sin(ws)
+    )
+    pet = 0.0023 * ra * (T + 17.8) * np.sqrt(td)
+    return np.clip(pet, 0, None)
+
+
 # --------------------------------------------------------------------------- #
 # 1) Balance de suelo diario  ->  recarga (la infiltracion que alimenta el modelo)
 # --------------------------------------------------------------------------- #
 def balance_suelo_diario(precip_mm, pet_mm, *, cc_mm: float = 100.0,
-                         coef_escorrentia: float = 0.1, k_percolacion: float = 1.0,
+                         wp_mm: float = 50.0, coef_escorrentia: float = 0.1,
+                         k_percolacion: float = 1.0,
                          soil_inicial: float | None = None) -> np.ndarray:
     """Recarga diaria (mm/día) con un balde de suelo + reservorio de percolación.
 
-    Cada día: la lluvia que no escurre (P·(1−esc)) menos la ET potencial ajusta el
-    almacenamiento del suelo (hasta `cc_mm`, capacidad de campo). El excedente entra a un
-    reservorio de percolación que libera recarga con constante `k_percolacion` (0–1; 1 = sin
-    retardo, valores menores difieren la recarga = "memoria" del no-saturado). Es la pieza que
-    en mHM equivaldría solo a la infiltración profunda, aquí en ~2-3 parámetros físicos.
+    Cada día: la lluvia que no escurre (P·(1−esc)) menos la ET REAL (ajustada por
+    humedad del suelo) ajusta el almacenamiento del suelo (entre wp_mm y cc_mm).
+    La ET real se reduce cuando el suelo está por debajo de capacidad de campo:
+    AET = PET × min(1, soil / cc_mm). Esto evita sobre-estimar la ET en suelos secos
+    (clave en clima semiárido). El excedente entra a un reservorio de percolación
+    que libera recarga con constante `k_percolacion` (0–1; 1 = sin retardo).
+
+    Parametros:
+        precip_mm: precipitacion diaria (mm/dia).
+        pet_mm: ET potencial diaria (mm/dia). Se usa Hargreaves si no hay datos.
+        cc_mm: capacidad de campo del suelo (mm). Default 100.
+        wp_mm: punto de marchitez permanente (mm). Debajo de este umbral, AET=0.
+               Default 50 (tipico suelo franco-arenoso).
+        coef_escorrentia: fraccion de la lluvia que escurre directamente (0-1).
+        k_percolacion: constante de liberacion del reservorio (0-1). 1 = sin retardo.
+        soil_inicial: humedad inicial del suelo (mm). Default = cc_mm (saturado).
     """
     P = np.asarray(precip_mm, dtype=float)
     PET = np.asarray(pet_mm, dtype=float)
@@ -39,13 +82,16 @@ def balance_suelo_diario(precip_mm, pet_mm, *, cc_mm: float = 100.0,
     perc = 0.0
     rec = np.zeros(n)
     for i in range(n):
-        bal = P[i] * (1.0 - coef_escorrentia) - PET[i]
+        pct = P[i] * (1.0 - coef_escorrentia)
+        aet = PET[i] * min(1.0, soil / cc_mm) if cc_mm > 0 else PET[i]
+        aet = min(aet, max(0.0, soil - wp_mm) + pct)
+        bal = pct - aet
         if bal >= 0:
             espacio = cc_mm - soil
             exceso = max(0.0, bal - espacio)
             soil = min(cc_mm, soil + bal)
         else:
-            soil = max(0.0, soil + bal)
+            soil = max(wp_mm, soil + bal)
             exceso = 0.0
         perc += exceso
         liberado = k * perc

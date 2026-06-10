@@ -88,6 +88,12 @@ CATALOGO: tuple[Insumo, ...] = (
     # --- OPCIONALES ---
     Insumo("rio", OPCIONAL, "Interacción río–acuífero (paquete RIV).",
            vector="rio", tabla="rio.csv"),
+    Insumo("sfr.csv", OPCIONAL, "Río con routing hidráulico (Streamflow Routing, más realista que RIV).",
+           tabla="sfr.csv"),
+    Insumo("uzf.csv", OPCIONAL, "Zona vadosa con ET retardada (UZF, reemplaza RCH+EVT).",
+           tabla="uzf.csv"),
+    Insumo("uzf_periodos.csv", OPCIONAL, "Infiltración y ET por periodo para UZF.",
+           tabla="uzf_periodos.csv"),
     Insumo("recarga_periodos.csv", OPCIONAL, "Recarga variable en el tiempo (transiente).",
            tabla="recarga_periodos.csv"),
     Insumo("parametros_calibracion.csv", OPCIONAL, "Parámetros ajustables con rangos (PEST++).",

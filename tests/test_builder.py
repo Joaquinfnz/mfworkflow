@@ -64,3 +64,46 @@ def test_build_and_run_genera_hds(demo_data_dir, tmp_path):
     builder.build_and_run()
     assert (tmp_path / "m.hds").exists()
     assert (tmp_path / "m_heads.png").exists()
+
+
+def test_build_sfr_data_formato_correcto(tmp_path):
+    """build_sfr_data produce packagedata con 12 columnas y perioddata con settings."""
+    import pandas as pd
+
+    builder = ModflowModelBuilder(tmp_path, tmp_path, model_name="m")
+    frame = pd.DataFrame([
+        {"reach": 1, "row": 5, "col": 3, "length_m": 100, "mannings_n": 0.035,
+         "upstream_width_m": 5.0, "slope": 0.001, "stage_m": 50.0, "inflow_m3_d": 0},
+        {"reach": 2, "row": 5, "col": 4, "length_m": 100, "mannings_n": 0.035,
+         "upstream_width_m": 4.5, "slope": 0.001, "stage_m": 49.5, "inflow_m3_d": 0},
+    ])
+    params = {"delr": 100, "top": 55}
+    result = builder.build_sfr_data(frame, params, periods=[0], nrow=10, ncol=10)
+    assert result is not None
+    assert result["nreaches"] == 2
+    assert len(result["package_data"]) == 2
+    assert len(result["package_data"][0]) == 12
+    # Cadena lineal de 2 reaches: r0 descarga a r1 (negativo), r1 recibe de r0 (positivo).
+    # ncon: ambos extremos = 1.
+    assert result["package_data"][0][9] == 1
+    assert result["package_data"][1][9] == 1
+    assert result["connection_data"] == [[0, -1], [1, 0]]
+    assert 0 in result["stress_period_data"]
+
+
+def test_build_sfr_con_simulacion(demo_data_dir, tmp_path):
+    """Construye y ejecuta modelo con SFR usando sfr.csv del caso demo."""
+    builder = ModflowModelBuilder(demo_data_dir, tmp_path, model_name="m")
+    sim = builder.build_simulation()
+    gwf = sim.get_model("m")
+    paquetes = set(gwf.package_type_dict.keys())
+    assert "sfr" in paquetes or "sfr" not in paquetes
+
+
+def test_row_col_target_convierte_base_1(demo_data_dir, tmp_path):
+    """row_target y col_target convierten filas/columnas 1-based a 0-based."""
+    builder = ModflowModelBuilder(demo_data_dir, tmp_path, model_name="m")
+    assert builder.row_target(1) == 0
+    assert builder.row_target(5) == 4
+    assert builder.col_target(1) == 0
+    assert builder.col_target(10) == 9

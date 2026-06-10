@@ -1,0 +1,37 @@
+# Caso demo sintetico 20x20, 2 capas. Rutas relativas a esta carpeta.
+
+proyecto:
+  nombre: "caso_demo"
+  descripcion: "Modelo sintetico 20x20, 2 capas, para validacion del workflow"
+  autor: "Joaquin Fernandez"
+
+objetivos:
+  proposito: "Demostracion end-to-end del workflow"
+  tipo: "steady"
+  escala: "local"
+
+motor: "simple"
+
+rutas:
+  datos: "datos/tablas"
+  gis: "datos/gis"
+  resultados: "resultados"
+  informe: "informe"
+
+modelo:
+  name: "modelo_datos"
+  drapear_dem: false
+
+solver:
+  complexity: "MODERATE"
+
+informe:
+  perfil: "astm"
+  titulo: "Modelo sintetico de demostracion"
+
+astm:
+  estandar: "D5447 / D5981"
+
+calibracion:
+  observaciones: "datos/tablas/observaciones_nivel.csv"
+  parametros: "datos/tablas/parametros_calibracion.csv"

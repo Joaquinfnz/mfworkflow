@@ -71,7 +71,9 @@ def calcular_indices(cfg, figuras_dir: Path | None = None) -> dict | None:
     if "et0_mm" in clima.columns:
         pet = clima["et0_mm"].astype(float).to_numpy()
     elif "temp_c" in clima.columns:
-        pet = np.clip(clima["temp_c"].astype(float).to_numpy(), 0, None) * 5.0
+        lat = float(clima["lat"].iloc[0]) if "lat" in clima.columns else -33.0
+        pet = H.pet_hargreaves(clima["temp_c"].astype(float).to_numpy(), lat=lat)
+        logger.warning("clima.csv sin 'et0_mm'; ET estimada via Hargreaves (lat=%.1f, aproximada).", lat)
     else:
         pet = np.zeros_like(precip)
 

@@ -33,12 +33,13 @@ class ModflowModelBuilder:
     """Construye un modelo MODFLOW 6 desde datos CSV con validaciones."""
 
     def __init__(self, data_dir: Path, workspace: Path, model_name: str = "modelo",
-                 *, drapear_dem: bool = False) -> None:
+                 *, drapear_dem: bool = False, newton: bool | None = None) -> None:
         self.data_dir = Path(data_dir)
         self.workspace = Path(workspace)
         self.model_name = model_name
         self.sim_name = model_name
-        self.drapear_dem = drapear_dem   # techo del modelo siguiendo el DEM (top_dem_grid.csv)
+        self.drapear_dem = drapear_dem
+        self.newton = newton  # True=forzar, False=desactivar, None=auto-detectar
         self.workspace.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------------------------------------------------
@@ -128,14 +129,14 @@ class ModflowModelBuilder:
 
         def validate_cell(row: pd.Series, filename: str) -> None:
             layer = self.layer_target(row.get("layer", 1))
-            row_index = int(row["row"])
-            col_index = int(row["col"])
+            row_index = self.row_target(row.get("row", 1))
+            col_index = self.col_target(row.get("col", 1))
             if not 0 <= layer < nlay:
                 errors.append(f"{filename}: layer {layer + 1} fuera de rango 1-{nlay}")
             if not 0 <= row_index < nrow:
-                errors.append(f"{filename}: row {row_index} fuera de rango 0-{nrow - 1}")
+                errors.append(f"{filename}: row {row_index + 1} fuera de rango 1-{nrow}")
             if not 0 <= col_index < ncol:
-                errors.append(f"{filename}: col {col_index} fuera de rango 0-{ncol - 1}")
+                errors.append(f"{filename}: col {col_index + 1} fuera de rango 1-{ncol}")
 
         chd = pd.read_csv(self.data_dir / "contornos_carga.csv")
         require_columns(chd, "contornos_carga.csv", {"lado", "carga_m"})
@@ -179,6 +180,24 @@ class ModflowModelBuilder:
                 if float(row["recharge_m_d"]) < 0:
                     errors.append("recarga_periodos.csv: recharge_m_d no puede ser negativa")
 
+        sfr = self.csv_if_exists("sfr.csv")
+        if sfr is not None:
+            require_columns(sfr, "sfr.csv", {"row", "col"})
+            for _, row in sfr.iterrows():
+                validate_cell(row, "sfr.csv")
+                if "slope" in sfr.columns and float(row.get("slope", 0)) < 0:
+                    errors.append("sfr.csv: slope no puede ser negativa")
+                if "mannings_n" in sfr.columns and float(row.get("mannings_n", 0)) <= 0:
+                    errors.append("sfr.csv: mannings_n debe ser positivo")
+
+        uzf = self.csv_if_exists("uzf.csv")
+        if uzf is not None:
+            require_columns(uzf, "uzf.csv", {"row", "col"})
+            for _, row in uzf.iterrows():
+                validate_cell(row, "uzf.csv")
+                if "vks_m_d" in uzf.columns and float(row.get("vks_m_d", 0)) <= 0:
+                    errors.append("uzf.csv: vks_m_d debe ser positivo")
+
         return errors
 
     @staticmethod
@@ -194,6 +213,20 @@ class ModflowModelBuilder:
     def layer_target(value: object, default_layer: int = 1) -> int:
         if pd.isna(value):
             return default_layer - 1
+        return int(float(value)) - 1
+
+    @staticmethod
+    def row_target(value: object, default: int = 1) -> int:
+        """Convierte indice de fila 1-based (usuario) a 0-based (MODFLOW)."""
+        if pd.isna(value):
+            return default - 1
+        return int(float(value)) - 1
+
+    @staticmethod
+    def col_target(value: object, default: int = 1) -> int:
+        """Convierte indice de columna 1-based (usuario) a 0-based (MODFLOW)."""
+        if pd.isna(value):
+            return default - 1
         return int(float(value)) - 1
 
     def read_stress_periods(self) -> pd.DataFrame:
@@ -321,9 +354,10 @@ class ModflowModelBuilder:
             return wel_spd
 
         for _, row in frame.iterrows():
-            r, c = int(row["row"]), int(row["col"])
+            r = self.row_target(row.get("row", 1))
+            c = self.col_target(row.get("col", 1))
             if active is not None and active[r, c] == 0:
-                logger.warning("pozos.csv: pozo en celda inactiva (row=%d, col=%d) omitido.", r, c)
+                logger.warning("pozos.csv: pozo en celda inactiva (row=%d, col=%d) omitido.", r + 1, c + 1)
                 continue
             entry = [(self.layer_target(row.get("layer", 1)), r, c), float(row["rate_m3_dia"])]
             for period in self.stress_period_targets(row.get("stress_period"), periods):
@@ -337,7 +371,8 @@ class ModflowModelBuilder:
             return riv_spd
 
         for _, row in frame.iterrows():
-            r, c = int(row["row"]), int(row["col"])
+            r = self.row_target(row.get("row", 1))
+            c = self.col_target(row.get("col", 1))
             if active is not None and active[r, c] == 0:
                 continue
             entry = [
@@ -361,7 +396,8 @@ class ModflowModelBuilder:
         if frame is None:
             return drn_spd
         for _, row in frame.iterrows():
-            r, c = int(row["row"]), int(row["col"])
+            r = self.row_target(row.get("row", 1))
+            c = self.col_target(row.get("col", 1))
             if active is not None and active[r, c] == 0:
                 continue
             entry = [(self.layer_target(row.get("layer", 1)), r, c),
@@ -381,7 +417,8 @@ class ModflowModelBuilder:
         if frame is None:
             return ghb_spd
         for _, row in frame.iterrows():
-            r, c = int(row["row"]), int(row["col"])
+            r = self.row_target(row.get("row", 1))
+            c = self.col_target(row.get("col", 1))
             if active is not None and active[r, c] == 0:
                 continue
             entry = [(self.layer_target(row.get("layer", 1)), r, c),
@@ -413,6 +450,199 @@ class ModflowModelBuilder:
         logger.info("EVT (evapotranspiracion freatica) activada: ET maxima %.2g m/d, "
                     "profundidad de extincion %.1f m.", max(rate.values()), max(depth.values()))
         return True
+
+    def build_sfr_data(self, frame: pd.DataFrame, params: dict,
+                       periods: list[int], nrow: int, ncol: int,
+                       active: "np.ndarray | None" = None) -> "dict | None":
+        """Construye datos para el paquete SFR (Streamflow Routing).
+
+        sfr.csv columnas: reach, row, col, length_m, mannings_n, upstream_width_m,
+                           slope, stage_m, inflow_m3_d, [layer], [stress_period]
+
+        Cada fila es un reach. Se numeran secuencialmente y se conectan
+        aguas abajo (reach N desagua al reach N+1). El ultimo reach es outlet.
+
+        Formato FloPy 3.10 packagedata (12 columnas):
+          ifno, cellid, rlen, rwid, rgrd, rtp, rbth, rhk, man, ncon, ustrf, ndv
+        perioddata usa setting name/value:
+          [ifno, 'INFLOW'|'STAGE'|..., valor]
+        """
+        if frame is None:
+            return None
+        nreaches = len(frame)
+        if nreaches == 0:
+            return None
+
+        reach_data = []
+        for idx, row in frame.iterrows():
+            r = self.row_target(row.get("row", 1))
+            c = self.col_target(row.get("col", 1))
+            layer = self.layer_target(row.get("layer", 1))
+            if active is not None and active[r, c] == 0:
+                logger.warning("sfr.csv: reach %d en celda inactiva omitido.", idx + 1)
+                continue
+            length = float(row.get("length_m", params.get("delr", 100.0)))
+            mannings = float(row.get("mannings_n", 0.035))
+            width = float(row.get("upstream_width_m", 5.0))
+            slope_val = float(row.get("slope", 0.001))
+            stage = float(row.get("stage_m", float(params.get("top", 50.0)) - 1.0))
+            inflow = float(row.get("inflow_m3_d", 0.0))
+            bed_k = float(row.get("bed_k_m_d", params.get("k", 1.0)))
+            bed_thick = float(row.get("bed_thickness_m", 1.0))
+            reach_data.append({
+                "cellid": (layer, r, c),
+                "rno": idx,
+                "length": length,
+                "mannings": mannings,
+                "width": width,
+                "slope": slope_val,
+                "stage": stage,
+                "inflow": inflow,
+                "bed_k": bed_k,
+                "bed_thick": bed_thick,
+            })
+
+        if not reach_data:
+            return None
+
+        # FloPy 3.10 SFR packagedata: 12 columnas
+        # ifno, cellid, rlen, rwid, rgrd, rtp, rbth, rhk, man, ncon, ustrf, ndv
+        # ncon = numero TOTAL de conexiones del reach (aguas arriba + aguas abajo).
+        # Cadena lineal: extremos ncon=1, reaches intermedios ncon=2, reach unico=0.
+        n = len(reach_data)
+        package_data = []
+        for i, rd in enumerate(reach_data):
+            if n == 1:
+                ncon = 0
+            elif i == 0 or i == n - 1:
+                ncon = 1
+            else:
+                ncon = 2
+            package_data.append([
+                rd["rno"], rd["cellid"], rd["length"], rd["width"],
+                rd["slope"], rd["stage"], rd["bed_thick"], rd["bed_k"],
+                rd["mannings"], ncon, 1.0, 0,
+            ])
+
+        # connectiondata: una fila por reach con TODAS sus conexiones.
+        # Convencion MODFLOW 6: el reach conectado aguas abajo se escribe con
+        # signo NEGATIVO (este reach descarga hacia el); aguas arriba positivo.
+        # Las conexiones deben ser reciprocas o MF6 falla al armar IA/JA.
+        # FloPy convierte 0-based -> 1-based (v>=0: v+1; v<0: v-1) preservando
+        # el signo, asi que pasamos rno 0-based con la convencion de signo.
+        connection_data = []
+        for i, rd in enumerate(reach_data):
+            conns = [rd["rno"]]
+            if i > 0:
+                conns.append(reach_data[i - 1]["rno"])      # aguas arriba (+)
+            if i < n - 1:
+                conns.append(-reach_data[i + 1]["rno"])     # aguas abajo (-)
+            connection_data.append(conns)
+
+        # perioddata: [[ifno, 'INFLOW', valor], [ifno, 'STAGE', valor], ...]
+        sfr_spd = {}
+        for period in periods:
+            period_entries = []
+            for i, row in frame.iterrows():
+                sp_val = row.get("stress_period", "all")
+                if sp_val == "all" or pd.isna(sp_val):
+                    if reach_data[i]["inflow"] != 0.0:
+                        period_entries.append([reach_data[i]["rno"], "INFLOW",
+                                               reach_data[i]["inflow"]])
+                    period_entries.append([reach_data[i]["rno"], "STAGE",
+                                          reach_data[i]["stage"]])
+                elif int(float(sp_val)) == period:
+                    if reach_data[i]["inflow"] != 0.0:
+                        period_entries.append([reach_data[i]["rno"], "INFLOW",
+                                               reach_data[i]["inflow"]])
+                    period_entries.append([reach_data[i]["rno"], "STAGE",
+                                          reach_data[i]["stage"]])
+            if period_entries:
+                sfr_spd[period] = period_entries
+
+        logger.info("SFR activado: %d reaches, %d periodos.", len(reach_data), len(sfr_spd))
+        return {"package_data": package_data, "connection_data": connection_data,
+                "stress_period_data": sfr_spd, "nreaches": len(reach_data)}
+
+    def add_uzf(self, gwf, params: dict, periods: list[int],
+                    nrow: int, ncol: int, nlay: int) -> bool:
+            """Zona vadosa (UZF): infiltracion y ET desde la superficie con retardo.
+
+            uzf.csv: row, col, [layer], landflag, ivertcon, surfdep_m, vks_m_d,
+                      thtr, thts, thti, eps
+            uzf_periodos.csv: stress_period, infiltration_m_d, pet_m_d,
+                              et_extinction_depth_m, ext_water_content, ha, hroot, rootact
+
+            UZF reemplaza RCH+EVT simple cuando esta presente. La capa superior debe ser
+            convertible (icelltype=1).
+            Formato FloPy 3.10: packagedata 10 columnas, perioddata 8 columnas.
+            """
+            uzf_cells = self.csv_if_exists("uzf.csv")
+            if uzf_cells is None:
+                return False
+
+            # FloPy 3.10 UZF packagedata: 10 columnas
+            # [ifno, cellid, landflag, ivertcon, surfdep, vks, thtr, thts, thti, eps]
+            package_data = []
+            for idx, row in uzf_cells.iterrows():
+                # ifno 0-based: FloPy 3.10 suma 1 al escribir (-> 1-based en archivo).
+                ifno = idx
+                r = self.row_target(row.get("row", 1))
+                c = self.col_target(row.get("col", 1))
+                layer = self.layer_target(row.get("layer", 1))
+                landflag = int(row.get("landflag", 1))
+                ivertcon = int(row.get("ivertcon", 0))
+                surfdep = float(row.get("surfdep_m", 0.0))
+                vks_val = float(row.get("vks_m_d", 0.5))
+                thtr_val = float(row.get("thtr", 0.05))
+                thts_val = float(row.get("thts", 0.35))
+                thti_val = float(row.get("thti", 0.20))
+                eps_val = float(row.get("eps", 4.2))
+                package_data.append([ifno, (layer, r, c), landflag, ivertcon,
+                                     surfdep, vks_val, thtr_val, thts_val,
+                                     thti_val, eps_val])
+
+            nuzfcells = len(package_data)
+
+            uzf_periodos = self.csv_if_exists("uzf_periodos.csv")
+            if uzf_periodos is None:
+                uzf_periodos = pd.DataFrame([{"stress_period": periods[0],
+                                              "infiltration_m_d": params.get("recharge", 0.0005),
+                                              "pet_m_d": 0.001,
+                                              "et_extinction_depth_m": 2.0,
+                                              "ext_water_content": 0.15,
+                                              "ha": 0.0, "hroot": 0.0, "rootact": 0.0}])
+
+            # perioddata: 8 columnas (simulate_et=True)
+            # [ifno, finf, pet, extdp, extwc, ha, hroot, rootact]
+            uzf_spd = {period: [] for period in periods}
+            for _, prow in uzf_periodos.iterrows():
+                target_periods = self.stress_period_targets(prow.get("stress_period"), periods)
+                finf = float(prow.get("infiltration_m_d", params.get("recharge", 0.0005)))
+                pet_val = float(prow.get("pet_m_d", 0.001))
+                extdp = float(prow.get("et_extinction_depth_m", 2.0))
+                extwc = float(prow.get("ext_water_content", 0.15))
+                ha_val = float(prow.get("ha", 0.0))
+                hroot_val = float(prow.get("hroot", 0.0))
+                rootact_val = float(prow.get("rootact", 0.0))
+                for period in target_periods:
+                    for ifno in range(nuzfcells):  # 0-based (FloPy escribe 1-based)
+                        uzf_spd[period].append([ifno, finf, pet_val, extdp, extwc,
+                                                ha_val, hroot_val, rootact_val])
+
+            # simulate_gwseep esta deprecado desde MF6 6.5.0 (usar DRN si se requiere
+            # descarga a la superficie); se omite para evitar el warning.
+            flopy.mf6.ModflowGwfuzf(
+                gwf,
+                simulate_et=True,
+                nuzfcells=nuzfcells,
+                packagedata=package_data,
+                perioddata=uzf_spd,
+            )
+
+            logger.info("UZF activado: %d celdas, infiltracion base %.2g m/d.",
+                        nuzfcells, finf)
+            return True
 
     def _recarga_multiplicador(self, nrow: int, ncol: int) -> "np.ndarray | None":
         """Multiplicador de recarga por celda desde recarga_zonas.csv (coef. de infiltración).
@@ -546,14 +776,22 @@ class ModflowModelBuilder:
 
         active = self._load_idomain(nrow, ncol)
 
+        # Newton-Raphson: se activa si (a) el usuario lo pide, (b) hay celdas convertibles
+        # (icelltype > 0), o (c) el modelo esta drapeado al DEM. Se desactiva solo si el
+        # usuario lo pide explicitamente (newton=False).
+        has_convertible = any(ic != 0 for ic in layers["icelltype"]) if isinstance(layers["icelltype"], list) else False
+        use_newton = (
+            self.newton is True
+            or (self.newton is None and (self.drapear_dem or has_convertible))
+        )
+
         sim = flopy.mf6.MFSimulation(sim_name=self.sim_name, sim_ws=str(self.workspace),
                                      exe_name=resolve_exe("mf6") or "mf6")
         flopy.mf6.ModflowTdis(sim, nper=len(perioddata), perioddata=perioddata, time_units="DAYS")
-        # Con geometría drapeada (acuífero libre que sigue el terreno) se activa la
-        # formulación Newton-Raphson, que maneja el secado/rehumedecimiento de celdas.
         gwf_kwargs: dict[str, object] = {}
-        if self.drapear_dem:
+        if use_newton:
             gwf_kwargs["newtonoptions"] = "NEWTON UNDER_RELAXATION"
+            logger.info("Newton-Raphson activado (under_relaxation) para celdas convertibles.")
         gwf = flopy.mf6.ModflowGwf(sim, modelname=self.model_name, save_flows=True, **gwf_kwargs)
         dis_kwargs: dict[str, object] = {}
         if active is not None:
@@ -581,8 +819,13 @@ class ModflowModelBuilder:
         flopy.mf6.ModflowGwfnpf(gwf, icelltype=layers["icelltype"], k=layers["k"], k33=layers["k33"],
                                 save_specific_discharge=True)
 
-        recharge = self.build_recharge_data(params, periods)
-        flopy.mf6.ModflowGwfrcha(gwf, recharge=recharge)
+        # UZF (zona vadosa) reemplaza la recarga (RCH) y la ET (EVT) simples:
+        # cuando esta presente, UZF aporta la infiltracion y la evapotranspiracion,
+        # de modo que agregar RCH/EVT ademas duplicaria la recarga.
+        uzf_present = self.csv_if_exists("uzf.csv") is not None
+        if not uzf_present:
+            recharge = self.build_recharge_data(params, periods)
+            flopy.mf6.ModflowGwfrcha(gwf, recharge=recharge)
         flopy.mf6.ModflowGwfchd(gwf, stress_period_data=self.build_chd_data(heads_frame, nrow, ncol, periods, active, nlay))
 
         wel_data = self.build_wel_data(wells_frame, periods, active)
@@ -600,7 +843,24 @@ class ModflowModelBuilder:
         ghb_data = self.build_ghb_data(self.csv_if_exists("ghb.csv"), periods, active)
         if any(ghb_data.values()):
             flopy.mf6.ModflowGwfghb(gwf, stress_period_data=ghb_data)
-        self.add_evt(gwf, params, periods, nrow, ncol)
+        if not uzf_present:
+            self.add_evt(gwf, params, periods, nrow, ncol)
+
+        # SFR (Streamflow Routing): data-driven, solo si existe sfr.csv
+        sfr_frame = self.csv_if_exists("sfr.csv")
+        if sfr_frame is not None:
+            sfr_data = self.build_sfr_data(sfr_frame, params, periods, nrow, ncol, active)
+            if sfr_data is not None:
+                flopy.mf6.ModflowGwfsfr(
+                    gwf,
+                    nreaches=sfr_data["nreaches"],
+                    packagedata=sfr_data["package_data"],
+                    connectiondata=sfr_data["connection_data"],
+                    perioddata=sfr_data["stress_period_data"],
+                )
+
+        # UZF (Unsaturated Zone Flow): data-driven, solo si existe uzf.csv
+        uzf_active = self.add_uzf(gwf, params, periods, nrow, ncol, nlay)
 
         self.build_storage_package(gwf, layers, stress_periods)
         flopy.mf6.ModflowGwfoc(
@@ -609,9 +869,9 @@ class ModflowModelBuilder:
             budget_filerecord=f"{self.model_name}.cbc",
             saverecord=[("HEAD", "ALL"), ("BUDGET", "ALL")],
         )
-        if self.drapear_dem:
-            # Solver robusto para acuífero libre drapeado (Newton): under-relaxation DBD +
-            # backtracking + BICGSTAB y más iteraciones, para tolerar el secado de celdas.
+        if use_newton:
+            # Solver robusto para celdas convertibles (Newton): under-relaxation DBD +
+            # backtracking + BICGSTAB y mas iteraciones, para tolerar el secado de celdas.
             flopy.mf6.ModflowIms(
                 sim, complexity="COMPLEX", linear_acceleration="BICGSTAB",
                 outer_maximum=500, inner_maximum=200,

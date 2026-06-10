@@ -49,6 +49,14 @@ class ProjectConfig:
         return str(self.raw.get("solver", {}).get("complexity", "MODERATE"))
 
     @property
+    def newton(self) -> bool | None:
+        """Newton-Raphson: True=forzar, False=desactivar, None=auto-detectar."""
+        val = self.raw.get("solver", {}).get("newton", None)
+        if val is None:
+            return None
+        return str(val).strip().lower() in ("true", "1", "yes")
+
+    @property
     def informe(self) -> dict[str, Any]:
         return self.raw.get("informe", {})
 

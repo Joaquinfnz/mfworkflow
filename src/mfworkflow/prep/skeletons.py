@@ -59,6 +59,21 @@ PLANTILLAS: dict[str, str] = {
         "kx_layer_1,valor_capa,capas_modelo.csv,kx_m_d,layer=1,8,1,30,log,K horizontal capa 1\n"
         "recharge_mult,multiplicador,recarga_periodos.csv,recharge_m_d,all,1,0.3,3,log,Multiplicador de recarga\n"
     ),
+    "sfr.csv": (
+        "reach,row,col,length_m,mannings_n,upstream_width_m,slope,stage_m,inflow_m3_d,layer,stress_period\n"
+        "1,7,2,500.0,0.035,5.0,0.001,55.0,0,1,all\n"
+        "2,7,3,500.0,0.035,5.0,0.001,54.8,0,1,all\n"
+        "3,7,4,500.0,0.035,5.0,0.001,54.5,0,1,all\n"
+    ),
+    "uzf.csv": (
+        "row,col,layer,landflag,ivertcon,surfdep_m,vks_m_d,thtr,thts,thti,eps\n"
+        "5,5,1,1,0,0.0,0.5,0.05,0.35,0.20,4.2\n"
+        "6,6,1,1,0,0.0,0.3,0.08,0.30,0.15,3.5\n"
+    ),
+"uzf_periodos.csv": (
+        "stress_period,infiltration_m_d,pet_m_d,et_extinction_depth_m,ext_water_content,ha,hroot,rootact\n"
+        "0,0.001,0.001,2.0,0.15,0.0,0.0,0.0\n"
+    ),
 }
 
 
