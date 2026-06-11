@@ -22,5 +22,9 @@ jobs:
         run: |
           pip install ruff
           ruff check src/ tests/
-      - name: Tests rapidos (sin binarios MODFLOW)
-        run: python -m pytest -m "not slow" -q
+      - name: Binarios MODFLOW (mf6, mp7, triangle)
+        run: get-modflow :flopy
+      - name: Generar resultados del caso demo
+        run: yaku pipeline --project examples/caso_demo
+      - name: Tests
+        run: python -m pytest -q
