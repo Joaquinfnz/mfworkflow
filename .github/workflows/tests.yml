@@ -27,6 +27,8 @@ jobs:
       - name: Binarios MODFLOW (mf6, mp7, triangle)
         run: get-modflow :flopy
       - name: Generar resultados del caso demo
-        run: yaku pipeline --project examples/caso_demo
+        run: |
+          yaku pipeline --project examples/caso_demo
+          yaku calibrate --project examples/caso_demo
       - name: Tests
         run: python -m pytest -q
