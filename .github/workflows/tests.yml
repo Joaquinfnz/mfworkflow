@@ -22,6 +22,8 @@ jobs:
         run: |
           pip install ruff
           ruff check src/ tests/
+      - name: Display virtual (PyVista headless)
+        uses: pyvista/setup-headless-display-action@v3
       - name: Binarios MODFLOW (mf6, mp7, triangle)
         run: get-modflow :flopy
       - name: Generar resultados del caso demo
